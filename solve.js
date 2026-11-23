@@ -720,13 +720,38 @@ function renderNodes(nodes, frames, root, ctx, depth) {
         const loop = fr.loop;
         const len = xs.length;
         frames.push(fr);
-        for (let k = 0; k < len; k++) {
-          fr.value = xs[k];
-          loop.index = k + 1;
-          loop.first = k === 0;
-          loop.last = k === len - 1;
-          loop.length = len;
-          out += renderNodes(n.body, frames, root, ctx, depth);
+        const bits = n.memo;
+        if (bits === undefined) {
+          for (let k = 0; k < len; k++) {
+            fr.value = xs[k];
+            loop.index = k + 1;
+            loop.first = k === 0;
+            loop.last = k === len - 1;
+            loop.length = len;
+            out += renderNodes(n.body, frames, root, ctx, depth);
+          }
+        } else {
+          let caches = n.memoAt;
+          if (caches === undefined) caches = n.memoAt = [];
+          let slot = caches[depth];
+          if (slot === undefined) slot = caches[depth] = [undefined, undefined, undefined, undefined];
+          for (let k = 0; k < len; k++) {
+            const el = xs[k];
+            fr.value = el;
+            loop.index = k + 1;
+            loop.first = k === 0;
+            loop.last = k === len - 1;
+            loop.length = len;
+            const vi = ((bits & 1) !== 0 && loop.first ? 1 : 0) | ((bits & 2) !== 0 && loop.last ? 2 : 0);
+            let m = slot[vi];
+            if (m === undefined) m = slot[vi] = new Map();
+            let s = m.get(el);
+            if (s === undefined) {
+              s = renderNodes(n.body, frames, root, ctx, depth);
+              m.set(el, s);
+            }
+            out += s;
+          }
         }
         frames.pop();
       }
@@ -773,6 +798,7 @@ function expansionConst(nodes, scope, templates, visiting) {
     if (k === 1 || k === 2) {
       if (!nameConst(n.path[0], scope)) return false;
     } else if (k === 3) {
+      if (!nameConst(n.path[0], scope)) return false;
       if (!expansionConst(n.then, scope, templates, visiting)) return false;
       if (n.else !== null && !expansionConst(n.else, scope, templates, visiting)) return false;
     } else if (k === 4) {
@@ -817,6 +843,52 @@ function expansionDepth(nodes, templates) {
   return d;
 }
 
+// A loop body may be rendered once per element and kept when nothing but that element, the
+// loop's own first/last flags and build constants can reach it. LOOP_OUT marks reads of the
+// loop that encloses the body being checked; reads of inner loops stay element-derived.
+const LOOP_OUT = {};
+
+function memoConst(nodes, scope, templates, visiting, reads) {
+  for (let i = 0; i < nodes.length; i++) {
+    const n = nodes[i];
+    const k = n.kind;
+    if (k === 1 || k === 2 || k === 3) {
+      const first = n.path[0];
+      if (first === 'loop' && scope.get('loop') === LOOP_OUT) {
+        if (n.path.length > 1) {
+          const prop = n.path[1];
+          if (prop === 'first') reads.bits |= 1;
+          else if (prop === 'last') reads.bits |= 2;
+          else return false;
+        }
+      } else if (!nameConst(first, scope)) return false;
+      if (k === 3) {
+        if (!memoConst(n.then, scope, templates, visiting, reads)) return false;
+        if (n.else !== null && !memoConst(n.else, scope, templates, visiting, reads)) return false;
+      }
+    } else if (k === 4) {
+      const was = scope.get(n.name);
+      const wasLoop = scope.get('loop');
+      const ok = nameConst(n.path[0], scope) === true;
+      scope.set(n.name, ok);
+      scope.set('loop', ok);
+      const bodyOk = memoConst(n.body, scope, templates, visiting, reads);
+      if (was === undefined) scope.delete(n.name); else scope.set(n.name, was);
+      if (wasLoop === undefined) scope.delete('loop'); else scope.set('loop', wasLoop);
+      if (!ok || !bodyOk) return false;
+    } else if (k === 5) {
+      const t = templates.get(n.name);
+      if (t === undefined) continue;
+      if (visiting.has(n.name)) return false;
+      visiting.add(n.name);
+      const ok = memoConst(t, scope, templates, visiting, reads);
+      visiting.delete(n.name);
+      if (!ok) return false;
+    }
+  }
+  return true;
+}
+
 function collectLoopNames(nodes, templates, seen) {
   for (const n of nodes) {
     if (n.kind === 3) {
@@ -845,6 +917,11 @@ function walkSites(nodes, scope, templates) {
       scope.set(n.name, ok);
       scope.set('loop', ok);
       walkSites(n.body, scope, templates);
+      const reads = { bits: 0 };
+      const memoScope = new Map();
+      memoScope.set(n.name, true);
+      memoScope.set('loop', LOOP_OUT);
+      if (memoConst(n.body, memoScope, templates, new Set(), reads)) n.memo = reads.bits;
       if (was === undefined) scope.delete(n.name); else scope.set(n.name, was);
       if (wasLoop === undefined) scope.delete('loop'); else scope.set('loop', wasLoop);
     } else if (k === 5) {
@@ -1041,6 +1118,12 @@ function tagsPlugin(b) {
   b.tags = [...bySlug.values()].sort((x, y) => y.posts.length - x.posts.length || byCodeUnits(x.slug, y.slug));
 }
 
+function tagRefOf(t) {
+  let r = t.ref;
+  if (r === undefined) r = t.ref = { name: t.name, slug: t.slug, url: t.url };
+  return r;
+}
+
 function cardOf(s) {
   return {
     title: s.data.title,
@@ -1050,7 +1133,7 @@ function cardOf(s) {
     summary: s.data.summary ?? '',
     excerpt: s.excerpt,
     reading_minutes: Math.max(1, Math.ceil(s.words / 200)),
-    tags: s.tagRefs.map((t) => ({ name: t.name, slug: t.slug, url: t.url })),
+    tags: s.tagRefs.map(tagRefOf),
   };
 }
 
