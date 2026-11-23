@@ -444,20 +444,17 @@ function renderMarkdown(src, env) {
   let html = '';
   const toc = [];
   let excerpt = null;
-  let words = 0;
   let i = 0;
   while (i < n) {
     const line = lines[i];
     const code = scanLine(line);
     if (code === 0) { i++; continue; }
     if (code === 1) {
-      words += wordsOf(line);
       const lang = scan.lang;
       const body = [];
       i++;
       while (i < n) {
         const cur = lines[i];
-        words += wordsOf(cur);
         if (fenceClose(cur)) { i++; break; }
         body.push(cur);
         i++;
@@ -469,7 +466,6 @@ function renderMarkdown(src, env) {
       continue;
     }
     if (code === 2) {
-      words += wordsOf(line);
       const depth = scan.depth;
       const text = line.slice(scan.start, scan.end);
       const id = uniqueSlug(slugify(text), ids);
@@ -479,12 +475,11 @@ function renderMarkdown(src, env) {
       i++;
       continue;
     }
-    if (code === 3) { words += wordsOf(line); html += '<hr>\n'; i++; continue; }
+    if (code === 3) { html += '<hr>\n'; i++; continue; }
     if (code === 4) {
       const body = [];
       while (i < n && lines[i].charCodeAt(0) === 62) {
         const raw = lines[i];
-        words += wordsOf(raw);
         i++;
         let q = raw.charCodeAt(1) === 32 ? raw.slice(2) : raw.slice(1);
         const t = trimLine(q);
@@ -499,7 +494,6 @@ function renderMarkdown(src, env) {
       const startAt = isOrdered ? scan.startAt : 1;
       const firstRest = scan.rest;
       const items = [[trimLine(firstRest)]];
-      words += wordsOf(line);
       i++;
       while (i < n) {
         const cur = lines[i];
@@ -508,9 +502,8 @@ function renderMarkdown(src, env) {
         if (isOrdered) {
           if (c === 6) rest = scan.rest;
         } else if (c === 5) rest = scan.rest;
-        if (rest !== null) { words += wordsOf(cur); items.push([trimLine(rest)]); i++; }
+        if (rest !== null) { items.push([trimLine(rest)]); i++; }
         else if (isContinued(cur)) {
-          words += wordsOf(cur);
           items[items.length - 1].push(trimLine(cur));
           i++;
         } else break;
@@ -522,14 +515,12 @@ function renderMarkdown(src, env) {
       html += `${list}</${tag}>\n`;
       continue;
     }
-    words += wordsOf(line);
     const body = [trimLine(line)];
     i++;
     while (i < n) {
       const cur = lines[i];
       const c = scanLine(cur);
       if (c === 0 || c === 1 || c === 2 || c === 3) break;
-      words += wordsOf(cur);
       body.push(trimLine(cur));
       i++;
     }
@@ -537,7 +528,7 @@ function renderMarkdown(src, env) {
     if (excerpt === null) excerpt = inner;
     html += `<p>${inner}</p>\n`;
   }
-  return { html, toc, excerpt: excerpt ?? '', words };
+  return { html, toc, excerpt: excerpt ?? '', words: wordsOf(src) };
 }
 
 // ---------------------------------------------------------------- templates
